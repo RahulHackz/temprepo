@@ -1,0 +1,95 @@
+name: Release Windows Vulkan Complete
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+
+jobs:
+  windows-vulkan:
+    runs-on: windows-2025
+    permissions:
+      actions: write
+
+    env:
+      VULKAN_VERSION: 1.4.313.2
+
+    steps:
+      # This clones the exact target repository and branch containing the diffusion visual updates
+      - name: Clone Target Repository
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          repository: 'danielhanchen/llama.cpp'
+          ref: 'diffusion-visual-updates'
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install Vulkan SDK
+        id: get_vulkan
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Build Everything (Executables + Vulkan Backend)
+        id: cmake_build
+        run: |
+          cmake -S . -B build -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_BORINGSSL=ON ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release
+
+      - name: Pack All Artifacts
+        id: pack_artifacts
+        run: |
+          7z a -snl llama-bin-win-vulkan-x64.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-bin-win-vulkan-x64.zip
+          name: llama-bin-win-vulkan-x64.zip
+
+  release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [windows-vulkan]
+    if: ${{ github.event.inputs.create_release == 'true' }}
+
+    steps:
+      - name: Download artifacts
+        id: download-artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifact
+          merge-multiple: true
+
+      # Creates the release and uploads the zip file to your GitHub Releases tab
+      - name: Create and Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v-diffusion-visual-updates"
+          name: "Release - Diffusion Visual Updates"
+          body: |
+            Windows Vulkan build compiled from `danielhanchen/llama.cpp` branch `diffusion-visual-updates`.
+          files: ./artifact/llama-bin-win-vulkan-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
